@@ -1,0 +1,288 @@
+---
+title: "Model"
+author: ""
+date: ''
+output: html_document
+---
+
+# Load the data
+
+```{r Load data, message = FALSE, warning = FALSE, error = FALSE}
+
+library(readr)
+library(tidyverse)
+library(caret)
+library(mlbench)
+
+train_df <- read_csv("~/Desktop/Day/0. Kaggle/Advanced/1. Two Sigma Connect/Data/ready/train.csv", 
+                  col_types = cols(listing_id = col_skip(),
+                                   bathrooms = col_number(), 
+                                   interest_level = col_factor(levels = c("low", "medium", "high")),
+                                   price_log = col_number()))
+
+test_df <- read_csv("~/Desktop/Day/0. Kaggle/Advanced/1. Two Sigma Connect/Data/ready/test.csv",col_types = cols(bathrooms = col_number(), price_log = col_number()))
+
+```
+
+
+# Feature selection
+
+## Boruta
+
+```{r}
+set.seed(123)
+library(ranger)
+library(Boruta)
+boruta.train <- Boruta(interest_level~., data = train_df, doTrace = 2)
+print(boruta.train)
+# Boruta performed 43 iterations in 2.463665 hours.
+#  28 attributes confirmed important: anger, anticipation, Avenue, Bath.5, bathrooms and 23
+# more;
+#  4 attributes confirmed unimportant: allowed, fitness, kmtop, nofee;
+
+getSelectedAttributes(boruta.train)
+plot(boruta.train)
+```
+
+```{r}
+cat("\n\nAttribute Importance Details:\n")
+options(width=125)
+save <- arrange(cbind(attr=rownames(attStats(boruta.train)), attStats(boruta.train)),desc(medianImp))
+write.csv(save, file = "boruta.csv", row.names=F)
+```
+
+
+
+```{r}
+# prepare training scheme
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+
+# train the model
+model <- train(interest_level~., data=train_df, method="lvq", preProcess="scale", trControl=control)
+# estimate variable importance
+importance <- varImp(model, scale=FALSE)
+# summarize importance
+print(importance)
+# plot importance
+plot(importance)
+```
+
+
+# Simple model 
+
+```{r Simple models, message = FALSE, warning = FALSE, error = FALSE}
+
+train_df <- train_df %>% select(-building_bad,-outdoor,-doorman,-fitness,-nofee,-kmtop,-allowed)
+#train_df_ready <- train_df %>% dplyr::select(-interest_level)
+#write_csv(train_df_ready, "train_df_ready_boruta.csv")
+
+# Set the cross validation
+train_control<- trainControl(method="cv", number=8, repeats=5)
+metric <- "Accuracy"
+
+# Train the SVM model
+modelSvm <- train(interest_level~., data=train_df, method="svmRadial", trControl=train_control, scale =FALSE)
+# KNN
+modelknn <- train(interest_level~., data=train_df, method="knn", trControl=train_control)
+# Bagged CART
+fit.treebag <- train(interest_level~., data=train_df, method="treebag", metric=metric, trControl=train_control)
+# Random Forest
+fit.rf <- train(interest_level~., data=train_df, method="rf", metric=metric, trControl=train_control)
+# summarize results
+bagging_results <- resamples(list(treebag=fit.treebag, rf=fit.rf, KNN=modelknn, SVM=modelSvm))
+
+summary(bagging_results)
+dotplot(bagging_results)
+```
+
+## First submission
+
+```{r}
+# First Prediction
+test_df_fit <- test_df %>% dplyr::select(-listing_id)
+# Drop feature (see Boruta analysis)
+test_df_fit <- test_df_fit %>% dplyr::select(-building_bad,-outdoor,-doorman,-fitness,-nofee,-kmtop,-allowed)
+# saved
+#write_csv(test_df_fit, "test_df_fit.csv")
+
+listing_id <- test_df %>% dplyr::select(listing_id)
+
+# Compute the prediction
+prediction <- predict(fit.rf, test_df_fit, type="prob")
+
+# Add the ID and send
+prediction$listing_id <- test_df$listing_id
+write_csv(prediction, "prediction.csv")
+```
+
+## Save models
+
+```{r}
+# Save model
+saveRDS(fit.rf, "rf.rds")
+saveRDS(fit.treebag, "treebag.rds")
+
+# Read model
+my_model <- readRDS("rf.rds")
+my_model <- readRDS("treebag.rds")
+```
+
+<br/>
+<hr/>
+<br/>
+
+# Advanced models
+
+## Log loss
+
+```{r logloss, message=F, warning=F}
+library(e1071)
+# Kaggle competition evaluate in logloss.
+
+LogLosSummary <- function (data, lev = NULL, model = NULL) {
+  LogLos <- function(actual, pred, eps = 1e-15) {
+    stopifnot(all(dim(actual) == dim(pred)))
+    pred[pred < eps] <- eps
+    pred[pred > 1 - eps] <- 1 - eps
+    -sum(actual * log(pred)) / nrow(pred) 
+  }
+  if (is.character(data$obs)) data$obs <- factor(data$obs, levels = lev)
+  pred <- data[, "pred"]
+  obs <- data[, "obs"]
+  isNA <- is.na(pred)
+  pred <- pred[!isNA]
+  obs <- obs[!isNA]
+  data <- data[!isNA, ]
+  cls <- levels(obs)
+
+  if (length(obs) + length(pred) == 0) {
+    out <- rep(NA, 2)
+  } else {
+    pred <- factor(pred, levels = levels(obs))
+    require("e1071")
+    out <- unlist(e1071::classAgreement(table(obs, pred)))[c("diag",                                                                                                                                                             "kappa")]
+
+    probs <- data[, cls]
+    actual <- model.matrix(~ obs - 1)
+    out2 <- LogLos(actual = actual, pred = probs)
+  }
+  out <- c(out, out2)
+  names(out) <- c("Accuracy", "Kappa", "LogLoss")
+
+  if (any(is.nan(out))) out[is.nan(out)] <- NA 
+
+  out
+}
+```
+
+## Caret ensemble 
+
+```{r model, message=F, warning=F}
+library(caretEnsemble)
+#library(MLmetrics)
+
+control=trainControl(method="repeatedcv", 
+						  number=5, 
+						  repeats=5, 
+						  classProbs=TRUE, 
+						  savePredictions=TRUE,
+						  summaryFunction = LogLosSummary)
+
+## train_subset <- train_df[sample(nrow(train_df), 2000), ] ##
+
+# C5.0
+fit.c50 <- train(interest_level~., data=train_df, method="C5.0", metric="LogLoss",
+                 trControl=control)
+
+# Stochastic Gradient Boosting
+fit.gbm <- train(interest_level~., data=train_df, method="gbm", metric="LogLoss",
+                 trControl=control, verbose=FALSE)
+
+# Glm model
+glm_model <- train( interest_level~., method = "glmnet", metric="LogLoss",
+    tuneGrid = expand.grid(alpha = 0:1, lambda = seq(0.0001, 1, length = 20)),
+    data = train_df, trControl = control)
+
+# summarize results
+boosting_results <- resamples(list(c5.0=fit.c50, gbm=fit.gbm, glm=glm_model))
+summary(boosting_results)
+dotplot(boosting_results)
+```
+
+### Save models
+```{r}
+# Save model
+saveRDS(fit.c50, "c50.rds")
+saveRDS(fit.gbm, "gbm.rds")
+saveRDS(glm_model, "glm.rds")
+```
+
+### Second submission
+
+```{r}
+# Compute the prediction
+prediction_c50 <- predict(fit.c50, test_df_fit, type="prob")
+prediction_gbm <- predict(fit.gbm, test_df_fit, type="prob")
+prediction_glm <- predict(glm_model, test_df_fit, type="prob")
+
+# Add the ID and send
+prediction_c50$listing_id <- test_df$listing_id
+write_csv(prediction_c50, "prediction_c50.csv")
+
+prediction_gbm$listing_id <- test_df$listing_id
+write_csv(prediction_gbm, "prediction_gbm.csv")
+
+prediction_glm$listing_id <- test_df$listing_id
+write_csv(prediction_glm, "prediction_glm.csv")
+```
+
+
+## Xgboost 
+
+```{r}
+require(xgboost)
+require(methods)
+
+## train_subset <- train_df[sample(nrow(train_df), 2000), ] ##
+
+trainMatrix <- train_df %>% dplyr::select(-interest_level)
+trainMatrix <- data.matrix(trainMatrix)
+
+#trainMatrix <- trainMatrix[,lapply(.SD,as.numeric)] %>% as.matrix
+#testMatrix <- test[,lapply(.SD,as.numeric)] %>% as.matrix
+
+y <- train_df$interest_level%>% {as.integer(.) -1}
+#outcome_numeric <- as.data.frame(y)
+#write_csv(outcome_numeric, "outcome_numeric.csv")
+
+
+#numberOfClasses <- max(y)
+numberOfClasses <- max(y) + 1 # !!!! 
+
+param <- list("objective" = "multi:softprob",
+              "eval_metric" = "mlogloss",
+              "num_class" = numberOfClasses)
+
+cv.nround <- 5
+cv.nfold <- 3
+
+bst.cv = xgb.cv(param=param, data = trainMatrix, label = y, 
+                nfold = cv.nfold, nrounds = cv.nround)
+```
+
+
+```{r}
+#Good Source: https://www.kaggle.com/tqchen/otto-group-product-classification-challenge/understanding-xgboost-model-on-otto-data
+nround = 50
+bst = xgboost(param=param, data = trainMatrix, label = y, nrounds=nround)
+```
+
+
+```{r}
+prediction_bst.cv <- predict(bst.cv, test_df_fit, type="prob")
+```
+
+
+<br/>
+<hr/>
+<br/>

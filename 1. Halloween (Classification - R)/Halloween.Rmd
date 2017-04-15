@@ -1,0 +1,838 @@
+---
+title: <center> Kaggle Playground - Ghouls, Goblins, and Ghosts </center>
+output:
+  html_document:
+    #theme: flatly
+    code_folding: show
+    #highlight: tango
+    number_sections: false
+    toc: false
+    toc_float: false
+---
+
+<br/>
+
+<center> Machine learning exploration </center>
+
+<br/>
+
+# {.tabset}
+
+## File descriptions
+
+train.csv - the training set  
+test.csv - the test set  
+sample_submission.csv - a sample submission file in the correct format
+
+<br/>
+<hr/>
+<br/>
+
+## Data fields
+
+id - id of the creature  
+bone_length - average length of bone in the creature, normalized between 0 and 1  
+rotting_flesh - percentage of rotting flesh in the creature  
+hair_length - average hair length, normalized between 0 and 1  
+has_soul - percentage of soul in the creature  
+color - dominant color of the creature: 'white','black','clear','blue','green','blood'  
+type - target variable: 'Ghost', 'Goblin', and 'Ghoul'  
+
+<br/>
+<hr/>
+<br/>
+
+## About Kaggle
+
+In 2010, Kaggle was founded as a platform for predictive modelling and analytics competitions on which companies and researchers post their data and statisticians and data miners from all over the world compete to produce the best models.  
+  
+This crowdsourcing approach relies on the fact that there are countless strategies that can be applied to any predictive modelling task and it is impossible to know at the outset which technique or analyst will be most effective. Kaggle also hosts recruiting competitions in which data scientists compete for a chance to interview at leading data science companies like Facebook, Winton Capital, and Walmart.
+
+<br/> 
+<hr/>
+<br/>
+
+# Data exploration
+
+## The data quality report {.tabset}
+
+### Head
+
+```{r, message=F, warning=F}
+## Library required ##
+# For data manipulation and tidying
+library(MASS)
+library(tidyr)
+library(dplyr)
+
+# For data visualizations
+library(ggplot2)
+library(plotly)
+
+# For modeling and predictions
+library(caret)
+library(glmnet)
+library(ranger)
+library(e1071)
+library(clValid)
+
+# Download databases
+
+# setwd("~/Desktop/Kaggle/1. Halloween")
+# thanks https://www.kaggle.com/amberthomas for many ideas in: https://www.kaggle.com/amberthomas/ghouls-goblins-and-ghosts-boo/ghosts-goblins-and-ghouls-oh-my 
+train <- read.csv("train.csv", header = TRUE, sep = ",", stringsAsFactors = FALSE)
+train$Dataset <- "train"
+test <- read.csv('test.csv', header = TRUE, stringsAsFactors = FALSE)
+test$Dataset <- "test"
+
+full <- bind_rows(train, test)
+
+head(train)
+```
+
+<br/> 
+<hr/>
+<br/>
+
+### Summary
+
+```{r}
+summary(train)
+```
+
+<br/> 
+<hr/>
+<br/>
+
+### Str
+
+```{r}
+# Define factor
+factor_V <- c('id', 'color', 'type')
+train[factor_V] <- lapply(train[factor_V], function(x) as.factor(x))
+
+str(train)
+```
+
+<br/> 
+<hr/>
+<br/>
+
+## First visualisations {.tabset}
+
+### Correlation
+
+```{r}
+library(corrplot)
+train_correlation <- train %>% select(bone_length:has_soul)
+train_correlation <- cor(train_correlation)
+# corrplot(train_correlation, method="circle")
+
+# data 
+corrplot.mixed(train_correlation)
+#cor(train_correlation)
+```
+
+### Comparison 
+
+```{r}
+pairs(train[,2:5], 
+      col = train$type, 
+      labels = c("Bone Length", "Rotting Flesh", "Hair Length", "Soul"))
+```
+
+### Histogram
+
+```{r, message=F, warning=F, fig.width=10}
+par(mfrow=c(1,3))
+hist(train$bone_length,col="#3090C7", main = "bone_length") 
+hist(train$rotting_flesh,col="#3090C7", main = "rotting_flesh")
+hist(train$has_soul,col="#3090C7", main = "has_soul")
+par(mfrow=c(1,2))
+plot(train$color,col="#3090C7", main = "Color")
+plot(train$type,col="#3090C7", main = "Type")
+```
+
+### 3D Plot
+
+```{r, fig.width=10, message=F, warning=F}
+# Plot using plotly
+
+p <- plot_ly(train, x = train$bone_length, y = train$rotting_flesh, z = train$has_soul, type = "scatter3d", mode = "markers", color=train$type)
+p
+
+```
+
+
+### Color histogram
+
+```{r}
+ggplot(train, aes(color, fill = type)) + geom_bar()
+
+```
+
+Our feature don't look easy to distinguisth... let's try to  create better features.
+
+<br/>
+<hr/>
+<br/>
+
+# Feature engineering {.tabset}
+
+By multiplying our variables  together we should obtain better features to distinguish the classes.
+
+## 1 
+```{r}
+# Sep1
+full <- full %>%
+    mutate(sep1 = bone_length * hair_length * has_soul,
+          sep1 = sep1 / max(sep1))
+ggplot(full, aes(id, sep1, color = type)) +
+    geom_point()
+```
+
+<br/>
+<hr/>
+<br/>
+
+## 2
+
+```{r}
+full <- full %>%
+    mutate(sep2 = sep1 / (rotting_flesh),
+          sep2 = sep2 / max(sep2))
+ggplot(full, aes(id, sep2, color = type)) +
+    geom_point()
+```
+
+<br/>
+<hr/>
+<br/>
+
+## 3
+
+```{r}
+full <- full %>%
+    mutate(allfeatures = ((bone_length^2) * (hair_length^4) * (has_soul^4))/rotting_flesh)
+ggplot(full, aes(id, sep1, color = type)) +
+    geom_point()
+```
+
+<br/>
+<hr/>
+<br/>
+
+## 4
+
+```{r}
+full <- full %>%
+          mutate(hair_soul = hair_length * has_soul)
+
+full <- full %>%
+          mutate(bone_flesh = bone_length * rotting_flesh,
+                 bone_hair = bone_length * hair_length,
+                 bone_soul = bone_length * has_soul,
+                 flesh_hair = rotting_flesh * hair_length,
+                 flesh_soul = rotting_flesh * has_soul)
+
+```
+
+
+
+# Modeling 
+
+## Simple predictive modeling {.tabset}
+
+### Cross-Validation
+
+```{r, include=FALSE, cache=FALSE}
+library("caret")
+```
+
+```{r, echo=T, warning=F, fig.width=10}
+# Cross-validation dataset
+train_cv <- train
+
+# Build the 3 levels
+#Customer_cv$Long_term_value<-cut(Customer_cv$sum, c(0,100, 400, 40000))
+#levels(Customer_cv$Long_term_value) <- c('low_value', 'medium_value', 'high_value')
+
+# Set the target variable as a factor
+#Customer_cv$Long_term_value <- as.factor(Customer_cv$Long_term_value)
+#Customer_cv <- Customer_cv %>% select(age:Long_term_value)
+
+# cross-validation 
+# library(caret)
+train_control<- trainControl(method="cv", number=8, repeats=5)
+head(train_control)
+```
+
+<br/>
+<hr/>
+<br/>
+
+
+### Tree learning
+
+```{r, warning=F, fig.width=10}
+library("rpart.plot")
+fit <- rpart(type ~ bone_length + rotting_flesh + hair_length + has_soul + color,
+             method = "class",
+             data = train_cv,
+             control = rpart.control(minsplit = 50),
+             parms = list(split='information'))
+
+rpart.plot(fit, type=2, extra = 1)
+
+```
+
+
+```{r, warning=F, fig.width=10}
+library("rpart")
+library("rpart.plot")
+
+# train the model 
+rpartmodel<- train(type~bone_length + rotting_flesh + hair_length + has_soul + color, data=train_cv, trControl=train_control, method="rpart", control = rpart.control(minsplit = 1), parms = list(split='information'))
+
+ # test to train the tree model with PCA:
+rpartmodel<- train(type~bone_length + rotting_flesh + hair_length + has_soul, data=train_cv, trControl=train_control, method="rpart", control = rpart.control(minsplit = 1), preProcess = "pca", parms = list(split='information'))
+
+# make predictions
+predictions <- predict(rpartmodel,train_cv)
+train_cv_tree<- cbind(train_cv,predictions)
+
+# summarize results
+confusionMatrix<- confusionMatrix(train_cv_tree$predictions,train_cv_tree$type)
+confusionMatrix
+```
+
+
+<br/>
+<hr/>
+<br/>
+
+### Naives Bayes
+
+```{r, warning=F, fig.width=10}
+library(e1071)
+library(rminer)
+# train the model 
+e1071model <- train(type~bone_length + rotting_flesh + hair_length + has_soul + color, data=train_cv, trControl=train_control, method="nb")
+# make predictions
+predictions <- predict(e1071model,train_cv)
+e1071modelbinded <- cbind(train_cv,predictions)
+# summarize results
+confusionMatrix<- confusionMatrix(e1071modelbinded$predictions,e1071modelbinded$type)
+confusionMatrix
+```
+
+<br/>
+<hr/>
+<br/>
+
+### KNN
+
+```{r, warning=F, fig.width=10}
+library(class)
+# train the model 
+knnFit <- train(type ~ bone_length + rotting_flesh + hair_length + has_soul + color, data = train_cv, method = "knn", trControl = train_control, preProcess = c("center","scale"), tuneLength = 10)
+# make predictions
+predictions<- predict(knnFit,train_cv)
+knnFit_bind <- cbind(train_cv,predictions)
+# summarize results
+confusionMatrix<- confusionMatrix(knnFit_bind$predictions,knnFit_bind$type)
+confusionMatrix
+```
+
+### Comparing Model!
+
+```{r, message=F}
+# load the library
+library(mlbench)
+# load the dataset
+comp.train <- train %>% select(bone_length:type)
+#data(PimaIndiansDiabetes)
+# prepare training scheme
+comp.control <- trainControl(method="repeatedcv", number=10, repeats=3)
+# train the LVQ model (Learning Vector Quantization)
+set.seed(7)
+modelLvq <- train(type~., data=comp.train, method="lvq", trControl=comp.control)
+# train the SVM model
+set.seed(7)
+modelSvm <- train(type~., data=comp.train, method="svmRadial", trControl=comp.control)
+# train tree
+set.seed(7)
+modeltree <- train(type~., data=comp.train, method="rpart", trControl=comp.control)
+# Tree + PCA
+set.seed(7)
+modeltreepca <- train(type~., data=comp.train, method="rpart", trControl=comp.control, preProcess = "pca", parms = list(split='information'))
+# KNN
+set.seed(7)
+modelknn <- train(type~., data=comp.train, method="knn", trControl=comp.control)
+# Bayes
+set.seed(7)
+modelbayes <- train(type~., data=comp.train, method="nb", trControl=comp.control)
+
+# collect resamples
+results <- resamples(list(LVQ=modelLvq, SVM=modelSvm, TREE=modeltree, TREEPCA=modeltreepca, KNN=modelknn, NBayes=modelbayes))
+# summarize the distributions
+summary(results)
+```
+
+<br/>
+<hr/>
+<br/>
+
+## Print Comparison
+
+```{r}
+# boxplots of results
+bwplot(results) 
+# dot plots of results
+# dotplot(results)
+```
+
+
+<br/>
+<hr/>
+<br/>
+
+## Combining model with ensemble methods {.tabset}
+### Bagging
+
+We use multiple models (of the same kind) to aggregate and predict:  
+  
+. Bagged CART  
+. Random Forest  
+
+
+```{r, warning=F, message=F}
+
+# Example of Bagging algorithms
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+seed <- 7
+metric <- "Accuracy"
+
+# Bagged CART
+set.seed(seed)
+fit.treebag <- train(type~., data=comp.train, method="treebag", metric=metric, trControl=control)
+
+# Random Forest
+set.seed(seed)
+fit.rf <- train(type~., data=comp.train, method="rf", metric=metric, trControl=control)
+
+# summarize results
+bagging_results <- resamples(list(treebag=fit.treebag, rf=fit.rf))
+summary(bagging_results)
+dotplot(bagging_results)
+
+```
+
+<br/>
+<hr/>
+<br/>
+
+### Boosting
+
+Boosting is as bagging but this time we focus on the mistakes done by the preciding models.
+
+. C5.0  
+. Stochastic Gradient Boosting  
+  
+  
+```{r, message=F, warning=F}
+library(mlbench)
+library(caret)
+library(caretEnsemble)
+
+# Example of Boosting Algorithms
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+seed <- 7
+metric <- "Accuracy"
+# C5.0
+set.seed(seed)
+## Error in loadNamespace(i, c(lib.loc, .libPaths()), versionCheck = vI[[i]]) : there is no package called ‘partykit’
+fit.c50 <- train(type~., data=comp.train, method="C5.0", metric=metric, trControl=control)
+# Stochastic Gradient Boosting
+set.seed(seed)
+fit.gbm <- train(type~., data=comp.train, method="gbm", metric=metric, trControl=control, verbose=FALSE)
+# summarize results
+boosting_results <- resamples(list(c5.0=fit.c50, gbm=fit.gbm))
+summary(boosting_results)
+dotplot(boosting_results)
+```
+
+<br/>
+<hr/>
+<br/>
+
+### Stacking
+
+We use models of different types to aggregate and predict.
+
+Example with:
+Linear Discriminate Analysis (LDA)
+Classification and Regression Trees (CART)
+k-Nearest Neighbors (kNN)
+Support Vector Machine with a Radial Basis Kernel Function (SVM)
+
+```{r, message=F, warning=F}
+# Example of Stacking algorithms
+# create submodels
+control <- trainControl(method="repeatedcv", number=10, repeats=3, savePredictions=TRUE, classProbs=TRUE)
+algorithmList <- c('lda', 'rpart', 'knn', 'svmRadial')
+
+set.seed(seed)
+models <- caretList(type~., data=comp.train, trControl=control, methodList=algorithmList)
+results <- resamples(models)
+summary(results)
+dotplot(results)
+```
+
+```{r}
+# correlation between results
+modelCor(results)
+splom(results)
+```
+
+Let’s combine the predictions of the classifiers using a simple linear model.
+
+
+```{r}
+# Thanks: http://machinelearningmastery.com/machine-learning-ensembles-with-r/ but not yet implemented for multiclass problems...
+# stack using glm
+# stackControl <- trainControl(method="repeatedcv", number=10, repeats=3, savePredictions=TRUE, classProbs=TRUE)
+# set.seed(seed)
+# stack.glm <- caretStack(models, method="glm", metric="Accuracy", trControl=stackControl)
+# print(stack.glm)
+```
+
+
+<br/>
+<hr/>
+<br/>
+
+
+### Glmnet
+
+```{r, warning=F, message=FALSE}
+# from https://www.kaggle.com/amberthomas/ghouls-goblins-and-ghosts-boo/ghosts-goblins-and-ghouls-oh-my 
+set.seed(10)
+
+### Clusters Without categorical variables
+# Set the seed
+set.seed(100)
+
+# Extract creature labels and remove column from dataset
+creature_labels <- full$type
+full2 <- full
+full2$type <- NULL
+
+# Remove categorical variables (id, color, and dataset) from dataset
+full2$id <- NULL
+full2$color <- NULL
+full2$Dataset <- NULL
+full2 <- full2 %>% select(bone_length:has_soul,hair_soul:flesh_soul)
+# Perform k-means clustering with 3 clusters, repeat 30 times
+creature_km_1 <- kmeans(full2, 3, nstart = 30)
+
+train_complete <- full[full$Dataset == 'train', ]
+test_complete <- full[full$Dataset == 'test', ]
+
+myControl <- trainControl(
+      method = "cv", 
+      number = 10,
+      repeats = 20, 
+      verboseIter = TRUE
+      )
+
+
+glm_model <- train(
+    type ~ bone_length + rotting_flesh + hair_length + has_soul + color + hair_soul + bone_flesh + bone_hair + 
+        bone_soul + flesh_hair + flesh_soul, 
+    method = "glmnet",
+    tuneGrid = expand.grid(alpha = 0:1,
+      lambda = seq(0.0001, 1, length = 20)),
+    data = train_complete,
+    trControl = myControl
+)
+
+```
+
+Plot 
+
+```{r, warning=F, message=FALSE}
+library(fpc)
+plotcluster(full2, creature_km_1$cluster)
+table(creature_km_1$cluster, creature_labels)
+```
+
+Or:
+
+```{r, message=F, warning=F}
+model <- train(
+   type ~ bone_length + rotting_flesh + hair_length + has_soul + color + hair_soul + bone_flesh + bone_hair + 
+        bone_soul + flesh_hair + flesh_soul, 
+       data = train_complete,
+
+   tuneGrid = expand.grid(alpha = 0:1,
+                          lambda = seq(0.0001, 1, length = 20)),
+   method = "glmnet",
+   trControl = myControl
+)
+ 
+# # Print model to console
+model
+```
+
+
+<br/>
+<hr/>
+<br/>
+
+
+# Tune the best models {.tabset}
+
+## Promising models  
+
+```{r}
+# MOST PROMISING MODEL:
+results <- resamples(list(GBM=fit.gbm, SVM=modelSvm, rf=fit.rf))
+summary(results)
+dotplot(results)
+```
+
+## Feature selection
+
+```{r, warning=F, message=F, echo=F}
+train_fe <- full %>% filter(Dataset=="train") %>% select(bone_length:type, sep1:flesh_soul)
+
+rf_model <- train(
+    type ~ .,
+    tuneLength = 3,
+    data = train_fe, 
+    method = "ranger", 
+    trControl = myControl,
+    importance = 'impurity'
+)
+```
+
+```{r, warning=F, message=F, fig.width=10}
+#1. check the importance of each variables
+vimp <- varImp(rf_model)
+# Plotting "vimp"
+ggplot(vimp, top = dim(vimp$importance)[1])
+train_correlation <- train_fe %>% select(bone_length:has_soul,sep1:flesh_soul) 
+train_correlation <- cor(train_correlation) 
+# corrplot(train_correlation, method="circle")
+
+# data 
+corrplot.mixed(train_correlation) 
+#cor(train_correlation)
+```
+
+
+## New RF
+
+```{r, warning=F, message=F}
+# 2.TUNE (http://machinelearningmastery.com/tune-machine-learning-algorithms-in-r/)
+
+set.seed(10)
+
+rf_model <- train(
+    type ~ bone_length + rotting_flesh + hair_length + has_soul + hair_soul + bone_flesh + bone_hair + 
+        bone_soul + flesh_hair + flesh_soul,
+    tuneLength = 3,
+    data = train_fe, 
+    method = "ranger", 
+    trControl = myControl,
+    importance = 'impurity'
+)
+
+print(rf_model)
+plot(rf_model)
+
+rf_model2 <- train(
+type ~ bone_length + rotting_flesh + hair_length + has_soul + color + allfeatures + bone_flesh + sep2 + 
+        bone_soul + flesh_hair + flesh_soul,
+    tuneLength = 3,
+    data = train_fe, 
+    method = "ranger", 
+    trControl = myControl,
+    importance = 'impurity'
+)
+
+print(rf_model)
+plot(rf_model)
+
+
+```
+
+
+## New GBM
+
+```{r, warning=F, message=F}
+# 1. TUNE http://stackoverflow.com/questions/15613332/using-caret-package-to-find-optimal-parameters-of-gbm - http://stackoverflow.com/questions/15613332/using-caret-package-to-find-optimal-parameters-of-gbm - http://stats.stackexchange.com/questions/141719/change-settings-in-the-prediction-model-caret-package 
+
+set.seed(10)
+
+glm_model <- train(
+    type ~ bone_length + rotting_flesh + hair_length + has_soul + color + hair_soul + bone_flesh + bone_hair + 
+        bone_soul + flesh_hair + flesh_soul, 
+    method = "glmnet",
+    tuneGrid = expand.grid(alpha = 0:1,
+      lambda = seq(0.0001, 1, length = 20)),
+    data = train_fe,
+    trControl = myControl
+)
+
+glm_model2 <- train(
+    type ~ bone_length + rotting_flesh + hair_length + has_soul + color + hair_soul + bone_flesh + sep2 + 
+        bone_soul + flesh_hair + flesh_soul, 
+    method = "glmnet",
+    tuneGrid = expand.grid(alpha = 0:1,
+      lambda = seq(0.0001, 1, length = 20)),
+    data = train_fe,
+    trControl = myControl
+)
+
+
+glm_model3 <- train(
+    type ~ bone_length + rotting_flesh + hair_length + has_soul + color + allfeatures + bone_flesh + sep2 + 
+        bone_soul + flesh_hair + flesh_soul, 
+    method = "glmnet",
+    tuneGrid = expand.grid(alpha = 0:1,
+      lambda = seq(0.0001, 1, length = 20)),
+    data = train_fe,
+    trControl = myControl
+)
+
+
+set.seed(10)
+fit.gbm <- train(type~bone_length + rotting_flesh + hair_length + has_soul + color, data=train_fe, method="gbm", metric=metric, trControl=control, verbose=FALSE)
+
+```
+
+
+## Results  
+
+```{r}
+# summarize results
+results <- resamples(list(glm=glm_model, rf=rf_model, rf2=rf_model2, glm2 =glm_model2, glm3=glm_model3))
+summary(results)
+dotplot(results)
+```
+
+# Send predictions to Kaggle:
+
+```{r, warning=F, fig.width=10}
+# test <- read.csv("test.csv", header = TRUE, sep = ",", stringsAsFactors = FALSE)
+# 
+# ## Make predictions
+# ## Reorder the data by creature ID number
+# test_complete <- full[full$Dataset == 'test', ]
+# test_complete <- test_complete %>%
+#                   arrange(id)
+# 
+# # Make predicted survival values
+# my_prediction <- predict(glm_model, test_complete)
+# solution <- data.frame(id = test_complete$id, Type = my_prediction)
+# write.csv(solution, file = "solution.csv", row.names = FALSE)
+# 
+# # glm_model3
+# my_prediction <- predict(glm_model3, test_complete)
+# solution <- data.frame(id = test_complete$id, Type = my_prediction)
+# write.csv(solution, file = "glm_model3.csv", row.names = FALSE)
+# 
+# 
+# # # Bayes
+# type <- predict(e1071model,test)
+# bayes2 <- cbind(test, type)
+# #write.csv(bayes2, file = "bayes.csv")
+# 
+# # Knn
+# predictions<- predict(knnFit,test)
+# results_knn <- cbind(test,predictions)
+# #write.csv(results_knn, file = "knn.csv")
+# 
+# # modelGbm
+# predictions<- predict(modelGbm,test)
+# results_modelGbm <- cbind(test,predictions)
+# write.csv(results_modelGbm, file = "gbm.csv")
+#
+# # Tree
+# predictions <- predict(rpartmodel,test)
+# train_cv_tree<- cbind(test,predictions)
+# #write.csv(train_cv_tree, file = "tree.csv")
+#
+# ## Combination 
+# type <- predict(rfmodel,test)
+# RF <- cbind(test,type)
+# RFprint <- RF %>% select(id, type)
+# #write.csv(RFprint, file = "rf.csv")
+
+# stackingmodel
+# type <- predict(stackingmodel,test$type)
+# RF <- cbind(stackingmodel,type)
+# RFprint <- RF %>% select(id, type)
+
+```
+
+<br/>
+<hr/>
+<br/>
+
+# Archives
+
+```{r}
+# # # principal component analysis
+# # NOT avaible  
+# # library(prcomp)
+# prin_comp <- train %>% select(bone_length:has_soul)
+# res.pca <- prcomp(prin_comp, scale = TRUE)
+# 
+# # Head
+# head(unclass(res.pca$rotation)[, 1:4])
+# 
+# prin_comp <- prcomp(prin_comp, scale. = T)
+# print(prin_comp)
+# names(res.pca)
+# 
+# ## Variances of the principal components
+# 
+# # The variance retained by each principal component can be obtained as follow :
+# 
+# # Eigenvalues
+# eig <- (res.pca$sdev)^2
+# # Variances in percentage
+# variance <- eig*100/sum(eig)
+# # Cumulative variances
+# cumvar <- cumsum(variance)
+# train.pca <- data.frame(eig = eig, variance = variance,
+#                      cumvariance = cumvar)
+# head(train.pca)
+# 
+# # Or extract
+# library("factoextra")
+# eig.val <- get_eigenvalue(res.pca)
+# head(eig.val)
+# 
+# # Variance 
+# barplot(train.pca[, 2], names.arg=1:nrow(train.pca), 
+#        main = "Variances",
+#        xlab = "Principal Components",
+#        ylab = "Percentage of variances",
+#        col ="steelblue")
+# 
+# # Eigenvalue
+# fviz_screeplot(res.pca, ncp=10, choice="eigenvalue")
+# 
+# fviz_pca_ind(res.pca, col.ind="cos2") +
+# scale_color_gradient2(low="white", mid="blue", 
+#     high="red", midpoint=0.50) + theme_minimal()
+# 
+# 
+# fviz_pca_biplot(res.pca,  geom = "text") +
+#   theme_minimal()
+```
+

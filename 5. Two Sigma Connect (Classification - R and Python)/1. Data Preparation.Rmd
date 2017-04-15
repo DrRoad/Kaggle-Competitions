@@ -1,0 +1,578 @@
+---
+title:  <center> Two Sigma Connect </center>
+author: ""
+date: ""
+output: html_document
+---
+
+<br/>
+
+<center> <h5> This is a **simplified version** of the program used for the Kaggle competition ["Two Sigma Connect"](https://www.kaggle.com/c/two-sigma-connect-rental-listing-inquiries) </h5></center>
+<center> 04/2017 </center>
+
+<br/>
+
+![](Img/logo.png)
+
+![](Img/photodune-5288878-new-york-city-cityscape-m.jpg)
+
+
+# {.tabset}
+
+## Descriptions
+
+Finding the perfect place to call your new home should be more than browsing through endless listings. RentHop makes apartment search smarter by using data to sort rental listings by quality. But while looking for the perfect apartment is difficult enough, structuring and making sense of all available real estate data programmatically is even harder. Two Sigma and RentHop, a portfolio company of Two Sigma Ventures, invite Kagglers to unleash their creative engines to uncover business value in this unique recruiting competition.
+
+Two Sigma invites you to apply your talents in this recruiting competition featuring rental listing data from RentHop. Kagglers will predict the number of inquiries a new listing receives based on the listing’s creation date and other features. Doing so will help RentHop better handle fraud control, identify potential listing quality issues, and allow owners and agents to better understand renters’ needs and preferences.
+
+Two Sigma has been at the forefront of applying technology and data science to financial forecasts. While their pioneering advances in big data, AI, and machine learning in the financial world have been pushing the industry forward, as with all other scientific progress, they are driven to make continual progress. This challenge is an opportunity for competitors to gain a sneak peek into Two Sigma's data science work outside of finance.
+
+<br/>
+<hr/>
+<br/>
+
+## Evaluation
+
+Submissions are evaluated using the multi-class logarithmic loss. Each listing has one true class. For each listing, you must submit a set of predicted probabilities (one for every listing). 
+
+<br/>
+<hr/>
+<br/>
+
+## File descriptions
+
+train.json - the training set
+test.json - the test set
+sample_submission.csv - a sample submission file in the correct format
+images_sample.zip - listing images organized by listing_id (a sample of 100 listings)
+Kaggle-renthop.7z - (optional) listing images organized by listing_id. Total size: 78.5GB compressed. Distributed by BitTorrent (Kaggle-renthop.torrent). 
+
+## Data fields
+
+bathrooms: number of bathrooms
+bedrooms: number of bathrooms
+building_id
+created
+description
+display_address
+features: a list of features about this apartment
+latitude
+listing_id
+longitude
+manager_id
+photos: a list of photo links. You are welcome to download the pictures yourselves from renthop's site, but they are the same as imgs.zip. 
+price: in USD
+street_address
+interest_level: this is the target variable. It has 3 categories: 'high', 'medium', 'low'
+
+<br/>
+<hr/>
+<br/>
+
+## About Kaggle
+
+In 2010, Kaggle was founded as a platform for predictive modelling and analytics competitions on which companies and researchers post their data and statisticians and data miners from all over the world compete to produce the best models.  
+  
+This crowdsourcing approach relies on the fact that there are countless strategies that can be applied to any predictive modelling task and it is impossible to know at the outset which technique or analyst will be most effective. Kaggle also hosts recruiting competitions in which data scientists compete for a chance to interview at leading data science companies like Facebook, Winton Capital, and Walmart.
+
+<br/> 
+<hr/>
+<br/>
+
+```{r setup, echo = FALSE, message = FALSE, warning = FALSE, error = FALSE}
+packages <- c("jsonlite", "dplyr", "purrr")
+purrr::walk(packages, library, character.only = TRUE, warn.conflicts = FALSE)
+
+# Load the tidyverse!!
+library(plyr)
+library(tidyverse)
+#library(tidyr)
+
+# unlist every variable except `photos` and `features` and convert to tibble
+train_df <- fromJSON("data/train.json")
+vars <- setdiff(names(train_df), c("photos", "features"))
+train_df <- map_at(train_df, vars, unlist) %>% tibble::as_tibble(.)
+
+## COMBINE TEST AND TRAIN DATA with NA in the target variable 
+test_df <- fromJSON("data/test.json")
+vars <- setdiff(names(test_df), c("photos", "features"))
+test_df <- map_at(test_df, vars, unlist) %>% tibble::as_tibble(.)
+test_df$interest_level <- "NA"
+
+# Combined.
+full_df <- bind_rows(train_df, test_df)
+full_df$interest_level <- factor(full_df$interest_level, levels = c("NA", "low", "medium", "high"))
+
+```
+
+# Check for duplicate
+
+```{r Check_for_duplicate, message = FALSE, warning = FALSE, error = FALSE}
+### CHECK duplicate and reposts ###
+# Check duplicate == NONE.
+## DUPLICATE_full_df <- unique(full_df[,])
+
+# Reposted == NONE.
+## Reposted <- full_df %>% select(-created)
+## Reposted <- unique(Reposted[,])
+
+# Reposted at a different price == NONE
+## Reposted_diff_price <- full_df %>% select(-created, -price)
+## Reposted_diff_price <- unique(test2[,])
+
+```
+
+# Location
+
+## Longitude and latitude
+
+Replace the **longitude and latitude variables** by two **neighborhood variable**.
+
+
+```{r Kmean30, message = FALSE, warning = FALSE, error = FALSE}
+# Remove outliers (training set only)
+# full_df <- full_df %>% filter(interest_level!="NA" & longitude > -74.02 & longitude < -73.85 & latitude < 40.88 & latitude > 40.4)
+
+train_df_neighborhood <- full_df %>% select(longitude, latitude)
+
+#Kmeans
+km = kmeans(train_df_neighborhood, 30, nstart=20)
+
+#Insert the results in the datatable.
+kmclusters <- (km$cluster)
+kmclusters <- as.data.frame(kmclusters)
+full_df <- cbind.data.frame(full_df, kmclusters)
+
+# Remove test to see the results
+full_df_train <- full_df %>% filter(interest_level!="NA" & longitude > -74.02 & longitude < -73.85 & latitude < 40.88 & latitude > 40.4)
+
+#Check clustering
+p <- ggplot(full_df_train, aes(x = longitude, y = latitude))
+p <- p + geom_point(aes(color=factor(kmclusters)))  #set color scale by a factor variable
+print(p)
+```
+
+Create a top layer of clusters to stabilise our predictive model. 
+
+```{r, message = FALSE, warning = FALSE, error = FALSE}
+kmtop = kmeans(train_df_neighborhood, 2, nstart=20)
+kmtop <- (kmtop$cluster)
+kmtop <- as.data.frame(kmtop)
+full_df <- cbind.data.frame(full_df, kmtop)
+
+# Remove test to see the results
+full_df_train <- full_df %>% filter(interest_level!="NA" & longitude > -74.02 & longitude < -73.85 & latitude < 40.88 & latitude > 40.4)
+
+#Check clustering
+p <- ggplot(full_df_train, aes(x = longitude, y = latitude))
+p <- p + geom_point(aes(color=factor(kmtop)))  #set color scale by a factor variable
+print(p)
+
+```
+
+**How valuable might be the new variables?** 
+
+```{r, message = FALSE, warning = FALSE, error = FALSE}
+# Remove outliers price
+#full_df <- full_df %>% filter(price < 5000 & price > 1000)
+
+# Remove lon and lat
+full_df <- full_df %>% select(-longitude, -latitude)
+
+# Remove test to see the results
+full_df_train <- full_df %>% filter(interest_level!="NA" & price < 5000 & price > 1000)
+
+p <- ggplot(full_df_train, aes(factor(kmclusters), price))
+p <- p + geom_boxplot(aes(fill = factor(interest_level)))
+print(p)
+```
+
+```{r, message = FALSE, warning = FALSE, error = FALSE}
+p <- ggplot(full_df_train, aes(factor(kmtop), price))
+p <- p + geom_boxplot(aes(fill = factor(interest_level)))
+print(p)
+```
+
+<br/> 
+<hr/>
+<br/>
+
+## Building ID
+
+Replace the **Building ID** variable by one simple binary variable.
+
+1. Check how usefull Building ID feature is.
+2. Replace by a simpler binary variable. 
+
+```{r Building ID, message = FALSE, warning = FALSE, error = FALSE}
+# Building ID
+## Source: https://www.kaggle.com/stoney71/two-sigma-connect-rental-listing-inquiries/exploratory-analysis-with-commentary/notebook 
+
+# Change
+full_df_buildingID <- full_df 
+library(tidyr)
+
+# Compute the level of interest.
+building_df_1 <- full_df_buildingID %>%
+  select(building_id, interest_level) %>% 
+  filter(building_id != 0, interest_level!="NA")
+
+building.df <- building_df_1 %>% 
+  group_by(building_id, interest_level) %>% 
+  tally() %>% 
+  spread(interest_level, n) %>% 
+  filter(!is.na(high))
+
+# building_df_1 <- full_df_buildingID %>%
+#   select(building_id, interest_level) %>% 
+#   filter(building_id != 0, interest_level!="NA")
+#   group_by(building_id, interest_level) %>% 
+#   summarise(no_rows = length(interest_level)) %>% 
+#   spread(interest_level, no_rows) %>%
+#   filter(!is.na(high))
+
+building.df$medium[is.na(building.df$medium)] <- 0
+building.df$low[is.na(building.df$low)] <- 0
+building.df <- filter(building.df, (low + medium + high) > 10)
+building.df <- building.df %>% mutate(per = 100 * high / (low + medium + high))
+building.df <- arrange(building.df, desc(per))
+
+## Plot 
+building_plot <- head(building.df, 30)
+g <- ggplot(building_plot, aes(x = reorder(building_id, per, sum),
+                            y = per))
+g <- g + labs(x="Building Id", y="High Interest (% of Total Listings)")
+g <- g + ggtitle("Most Popular Buildings") + 
+        theme(plot.title = element_text(hjust = 0.5))
+g <- g + geom_bar(stat = "identity",  colour = "blue", fill = "blue") + coord_flip()
+g <- g + scale_fill_brewer(palette = "Blue")
+g
+```
+
+
+```{r, message = FALSE, warning = FALSE, error = FALSE}
+
+building.df = within(building.df, {
+    building_good = ifelse(per > 25, 1, 0)
+    building_bad = ifelse(per < 3, 1, 0)
+ })
+
+buildingID <- building.df %>% select(building_id, building_good, building_bad)
+
+full_df_buildingID <- merge(x = full_df_buildingID, y = buildingID, by = "building_id", all.x = TRUE)
+
+full_df_buildingID <- full_df_buildingID %>% select(-building_id)
+```
+
+<br/> 
+<hr/>
+<br/>
+
+## Manager 
+
+Same work than for the building ID.
+
+```{r, message = FALSE, warning = FALSE, error = FALSE}
+
+full_manager <- full_df_buildingID
+
+manager_df_1 <- full_manager %>%
+  select(manager_id, interest_level) %>% 
+  filter(manager_id != 0, interest_level!="NA")
+
+manager.df <- manager_df_1 %>% 
+  group_by(manager_id, interest_level) %>% 
+  tally() %>% 
+  spread(interest_level, n) %>% 
+  filter(!is.na(high))
+
+# manager.df <- full_manager %>%
+#   filter(interest_level!="NA") %>%
+#   group_by(manager_id, interest_level) %>% 
+#   summarise(no_rows = length(interest_level)) %>% 
+#   spread(interest_level, no_rows) %>%
+#   filter(!is.na(high))
+
+manager.df$medium[is.na(manager.df$medium)] <- 0
+manager.df$low[is.na(manager.df$low)] <- 0
+manager.df <- filter(manager.df, (low + medium + high) > 20)
+manager.df <- manager.df %>% mutate(per = 100 * high / (low + medium + high))
+manager.df <- arrange(manager.df, desc(per))
+
+#plot
+manager_subset <- head(manager.df, 15)
+g <- ggplot(manager_subset, aes(x = reorder(manager_id, per, sum),
+                    y = per))
+g <- g + labs(x="Manager Id", y="High Interest (% of Total Listings)")
+g <- g + ggtitle("Most Popular Managers") + 
+        theme(plot.title = element_text(hjust = 0.5))
+g <- g + geom_bar(stat = "identity",  colour = "blue", fill = "blue") + coord_flip()
+g <- g + theme(legend.position="bottom", legend.direction="horizontal",
+               legend.title = element_blank())
+g
+```
+
+```{r, message = FALSE, warning = FALSE, error = FALSE}
+manager.df = within(manager.df, {
+    manager_good = ifelse(per > 25, 1, 0)
+    manager_bad = ifelse(per < 3, 1, 0)
+ })
+
+manager.df <- manager.df %>% select(manager_id, manager_good, manager_bad)
+
+full_manager <- merge(x = full_manager, y = manager.df, by = "manager_id", all.x = TRUE)
+
+full_manager <- full_manager %>% select(-manager_id)
+```
+
+<br/> 
+<hr/>
+<br/>
+
+## Listing ID
+
+Check if Listing ID variable provide any information on our target variable. Save it for later.
+
+```{r listing ID, message = FALSE, warning = FALSE, error = FALSE}
+#Sources: Michael Hartman:https://www.kaggle.com/zeroblue/two-sigma-connect-rental-listing-inquiries/visualizing-listing-id-vs-interest-level
+
+ListingID <- full_manager
+Listing_train <- ListingID %>% filter(interest_level!="NA")
+
+p <- ggplot(Listing_train, aes(x = price, y = listing_id))
+p <- p + geom_point(aes(color=factor(interest_level)))  #set color scale by a factor variable
+print(p)
+
+```
+
+```{r, message = FALSE, warning = FALSE, error = FALSE}
+## That's a very tricky variable though! 
+ListingID = within(ListingID, {
+    listing_bad = ifelse(listing_id > 7250000, 1, 0)
+ })
+
+## Listing ID need to be keep for the predictions
+# ListingID <- ListingID %>% select(-listing_id)
+
+```
+
+<br/> 
+<hr/>
+<br/>
+
+# Text analysis
+
+## Description 
+
+```{r Text analysis, message = FALSE, warning = FALSE, error = FALSE}
+library(syuzhet)
+
+Text_analysis <- ListingID
+sentiment <- get_nrc_sentiment(Text_analysis$description)
+
+Text_analysis <- cbind.data.frame(Text_analysis, sentiment)
+
+Text_analysis_plot <- Text_analysis %>% filter(interest_level!="NA", price < 5000)
+
+p <- ggplot(Text_analysis_plot, aes(factor(negative), price))
+p <- p + geom_boxplot(aes(fill = factor(interest_level)))
+print(p)
+
+p <- ggplot(Text_analysis_plot, aes(factor(positive), price))
+p <- p + geom_boxplot(aes(fill = factor(interest_level)))
+print(p)
+
+```
+
+## Street or avenue
+
+```{r Street or avenue, message = FALSE, warning = FALSE, error = FALSE}
+library(stringr)
+#Text_analysis <- str_to_lower(Text_analysis$display_address, Text_analysis$street_address)
+
+Text_analysis = within(Text_analysis, {
+  Street = ifelse(str_detect(display_address, "street") | str_detect(display_address, "St"), 1, 0 )
+  Avenue = ifelse(str_detect(display_address, "Avenue") | str_detect(display_address, "Ave"), 1, 0 )
+ })
+
+test <- Text_analysis %>% filter(Street==1 & interest_level!="NA")
+test2 <- Text_analysis %>% filter(Avenue==1 & interest_level!="NA")
+
+par(mfrow=c(1,2))
+ggplot(test, aes(x=Street, y=Street, fill=interest_level)) + geom_bar(stat='identity')
+ggplot(test2, aes(x=Avenue, y=Avenue, fill=interest_level)) + geom_bar(stat='identity')
+```
+
+
+## Features
+
+```{r Features, message = FALSE, warning = FALSE, error = FALSE}
+#Sources: https://www.kaggle.com/ygtcrt/two-sigma-connect-rental-listing-inquiries/how-to-deal-with-features-in-renthop-data
+library(DT)
+# Total number of feature in train set
+length(unique(Text_analysis$features))
+
+# Summarize count of features
+detach("package:plyr", unload=TRUE) 
+
+feature = data.frame(feature = tolower(unlist(Text_analysis$features))) %>%
+  group_by(feature) %>%
+  summarise(feature_count = n()) %>%
+  arrange(desc(feature_count)) %>%
+  filter(feature_count >= 50)
+
+# So how do we GATHER and then SELECT the most important ones?
+datatable(head(feature, n=50),options = list(scrollX = TRUE))
+
+```
+
+
+```{r, message = FALSE, warning = FALSE, error = FALSE}
+Text_analysis = within(Text_analysis, {
+  elevator = ifelse(str_detect(features, "elevator"), 1, 0 )
+  laundry = ifelse(str_detect(features, "Laundry") | str_detect(features, "laundry") | str_detect(features, "washer"), 1, 0 )
+  wood = ifelse(str_detect(features, "wood"), 1, 0 )
+  doorman = ifelse(str_detect(features, "doorman"), 1, 0 )
+  nofee = ifelse(str_detect(features, "no fee"), 1, 0 )
+  fitness = ifelse(str_detect(features, "fitness") | str_detect(features, "gym"), 1, 0 )
+  outdoor = ifelse(str_detect(features, "outdoor") | str_detect(features, "balcony") | str_detect(features, "garden") | str_detect(features, "roof"), 1, 0 )
+  allowed = ifelse(str_detect(features, "allowed"), 1, 0 )
+ })
+
+```
+
+
+```{r, message = FALSE, warning = FALSE, error = FALSE}
+# Just keep positive and negative.
+Text_analysis <- Text_analysis %>% select(-description, -display_address, -features, -street_address)
+
+```
+
+<br/> 
+<hr/>
+<br/>
+
+# Apartment 
+
+## Bathrooms
+
+```{r Bathrooms, message = FALSE, warning = FALSE, error = FALSE}
+apartment <- Text_analysis
+
+apartment = within(apartment, {
+    Bath.5 = ifelse(bathrooms == 1.5|bathrooms == 2.5|bathrooms == 3.5|bathrooms == 4.5|bathrooms == 0, 1, 0)
+ })
+
+#remove if + de 4,5
+## apartment <- apartment %>% filter(bathrooms < 4 & bathrooms > 0)
+
+apartment_plot <- apartment %>% filter(interest_level!="NA", price < 5000)
+
+p <- ggplot(apartment_plot, aes(factor(bathrooms), price))
+p <- p + geom_boxplot(aes(fill = factor(interest_level)))
+print(p)
+
+```
+
+## Bedrooms
+
+```{r Bedrooms, message = FALSE, warning = FALSE, error = FALSE}
+p <- ggplot(apartment_plot, aes(factor(bedrooms), price))
+p <- p + geom_boxplot(aes(fill = factor(interest_level)))
+print(p)
+
+## apartment <- apartment %>% filter(bedrooms < 6)
+
+```
+
+## Photo ID
+
+```{r Photo, message = FALSE, warning = FALSE, error = FALSE}
+#create a function which "counts" the number of pics in the "photos" column of lists
+pic.num.fun <- function(x) {length(unlist(x))}
+#applying the function above over the data
+pic.num <- sapply(apartment$photos, pic.num.fun)
+#adding the new variable
+apartment <- cbind(apartment, pic.num)
+
+apartment = within(apartment, {
+    hide = ifelse(pic.num <= 1, 1, 0)
+ })
+
+apartment <- apartment %>% select(-photos, -pic.num)
+```
+
+
+## Price 
+
+```{r Price, message = FALSE, warning = FALSE, error = FALSE}
+apartment_plot <- apartment %>% filter(interest_level!="NA")
+hist_cut <- ggplot(apartment_plot, aes(x=price, fill=interest_level))
+hist_cut + geom_histogram(binwidth = 100) # defaults to stacking
+```
+
+```{r, message = FALSE, warning = FALSE, error = FALSE}
+apartment <- apartment %>% mutate(price_log = log(price))
+hist(apartment$price_log, breaks=120)
+```
+
+
+Order clusters by the median price.
+
+```{r Order_clusters, message = FALSE, warning = FALSE, error = FALSE}
+# 3 top clusters
+apartment_kmtop <- apartment %>% 
+  group_by(kmtop) %>% 
+  summarise (mean_price = mean(price))
+
+# 30 others
+apartment_kmclusters <- apartment %>% 
+  group_by(kmclusters) %>% 
+  summarise (mean_price = mean(price)) %>% 
+  arrange(mean_price)
+
+# Save this
+apartment_kmclusters$ordered_kmclusters <- seq.int(nrow(apartment_kmclusters))
+apartment_kmclusters <-apartment_kmclusters %>% select(-mean_price)
+apartment <- left_join(apartment, apartment_kmclusters, by ="kmclusters")
+apartment <- apartment %>% select(-kmclusters)
+
+# Remove test to see the results
+apartment_plot <- apartment %>% filter(interest_level!="NA", price < 5000 & price > 1000)
+
+p <- ggplot(apartment_plot, aes(factor(ordered_kmclusters), price))
+p <- p + geom_boxplot(aes(fill = factor(interest_level)))
+print(p)
+
+```
+
+
+
+```{r finalCSV, message = FALSE, warning = FALSE, error = FALSE}
+model <- apartment 
+model[is.na(model)] <- 0
+model <- model %>% select(-price, -created)
+
+# # Full
+# write.csv(model, file = "model.csv", row.names=F)
+# 
+# # Training_df
+# train <- model %>% filter(interest_level != "NA")
+# write.csv(train, file = "train.csv", row.names=F)
+# 
+# # Training_df (Outcome variable)
+# outcome <- train %>% select(interest_level)
+# write.csv(outcome, file = "outcome.csv", row.names=F)
+# 
+# outcome_all <- model %>% select(interest_level)
+# write.csv(outcome_all, file = "outcome_all.csv", row.names=F)
+# 
+# # Test_df
+# test <- model %>% filter(interest_level == "NA") %>% select(-interest_level)
+# write.csv(test, file = "test.csv", row.names=F)
+
+str(model)
+
+```
+
+
