@@ -1,0 +1,131 @@
+---
+title:  <center> Quora Question Pairs </center>
+author: ""
+date: ""
+output: html_document
+---
+
+
+1. Make the sentiment analysis of the 2 columns for the question.   
+-> Save it when it's done.
+
+```{r}
+library(tidyverse)
+library(syuzhet)
+
+## Load data
+train <- read_csv("~/Desktop/Day/0. Kaggle/Advanced/1. Quora/Data/train.csv")
+#train_question1_sentiment <- get_nrc_sentiment(train$question1)
+#train_question2_sentiment <- get_nrc_sentiment(train$question2)
+
+## Save the data set
+#write.csv(train_question1_sentiment, "train_question1_sentiment.csv")
+#write.csv(train_question2_sentiment, "train_question2_sentiment.csv")
+
+test <- read_csv("~/Desktop/Day/0. Kaggle/Advanced/1. Quora/Data/test.csv")
+test_question1_sentiment <- get_nrc_sentiment(test$question1)
+write.csv(test_question1_sentiment, "test_question1_sentiment.csv")
+
+test_question2_sentiment <- get_nrc_sentiment(test$question2)
+write.csv(test_question2_sentiment, "test_question2_sentiment.csv")
+
+```
+
+2. Than compute may be how similard their are. and keep this as new variables.  
+
+```{r Text analysis, message = FALSE, warning = FALSE, error = FALSE}
+
+#### TRAIN DATASET ####
+train_q1 <- read_csv("~/Desktop/Day/0. Kaggle/Advanced/1. Quora/Data/sentiment_analysis/train_question1_sentiment.csv")
+train_q2 <- read_csv("~/Desktop/Day/0. Kaggle/Advanced/1. Quora/Data/sentiment_analysis/train_question2_sentiment.csv")
+
+## Create new data frame that is the computation of the both
+# 1 == Same and 0 == different. 
+
+train_sentiment <- full_join(train_q1, train_q2, by="X1")
+
+train_sentiment <- train_sentiment %>%
+  mutate(ANGER = ifelse(anger.x == anger.y, 1, ifelse(2,0))) %>% 
+  mutate(ANTICIPATION = ifelse(anticipation.x == anticipation.y, 1, ifelse(2,0))) %>% 
+  mutate(DISGUST = ifelse(disgust.x == disgust.y, 1, ifelse(2,0))) %>% 
+  mutate(FEAR = ifelse(fear.x == fear.y, 1, ifelse(2,0))) %>% 
+  mutate(JOY = ifelse(joy.x == joy.y, 1, ifelse(2,0))) %>% 
+  mutate(SADNESS = ifelse(sadness.x == sadness.y, 1, ifelse(2,0))) %>% 
+  mutate(SURPRISE = ifelse(surprise.x == surprise.y, 1, ifelse(2,0))) %>% 
+  mutate(TRUST = ifelse(trust.x == trust.y, 1, ifelse(2,0))) %>% 
+  mutate(NEGATIVE = ifelse(negative.x == negative.y, 1, ifelse(2,0))) %>% 
+  mutate(POSITIVE = ifelse(positive.x == positive.y, 1, ifelse(2,0)))
+
+train_sentiment <- train_sentiment %>%
+  select(X1, ANGER:POSITIVE) %>% 
+  mutate(SUM = ANGER+ANTICIPATION+DISGUST+FEAR+JOY+SADNESS+SURPRISE+TRUST+NEGATIVE+POSITIVE)
+
+#### TEST DATASET ####
+
+testOOO <- read_csv("~/Desktop/Day/0. Kaggle/Advanced/1. Quora/test_question1_sentiment.csv")
+testOOO2 <- read_csv("~/Desktop/Day/0. Kaggle/Advanced/1. Quora/test_question2_sentiment.csv")
+
+test_sentiment_joined <- full_join(testOOO, testOOO2, by="X1")
+
+test_sentiment <- test_sentiment_joined %>%
+  mutate(ANGER = ifelse(anger.x == anger.y, 1, ifelse(2,0))) %>% 
+  mutate(ANTICIPATION = ifelse(anticipation.x == anticipation.y, 1, ifelse(2,0))) %>% 
+  mutate(DISGUST = ifelse(disgust.x == disgust.y, 1, ifelse(2,0))) %>% 
+  mutate(FEAR = ifelse(fear.x == fear.y, 1, ifelse(2,0))) %>% 
+  mutate(JOY = ifelse(joy.x == joy.y, 1, ifelse(2,0))) %>% 
+  mutate(SADNESS = ifelse(sadness.x == sadness.y, 1, ifelse(2,0))) %>% 
+  mutate(SURPRISE = ifelse(surprise.x == surprise.y, 1, ifelse(2,0))) %>% 
+  mutate(TRUST = ifelse(trust.x == trust.y, 1, ifelse(2,0))) %>% 
+  mutate(NEGATIVE = ifelse(negative.x == negative.y, 1, ifelse(2,0))) %>% 
+  mutate(POSITIVE = ifelse(positive.x == positive.y, 1, ifelse(2,0)))
+
+train_sentiment_filtered <- test_sentiment %>%
+  select(X1, ANGER:POSITIVE) %>% 
+  mutate(SUM = ANGER+ANTICIPATION+DISGUST+FEAR+JOY+SADNESS+SURPRISE+TRUST+NEGATIVE+POSITIVE)
+  
+
+```
+
+
+3. Check how powerfull is the new variable.  
+
+```{r}
+
+#### TRAIN DATA SET ####
+# create id
+colnames(train_sentiment)[1] <- "id"
+
+train_sentiment <- train_sentiment %>% select(ANGER:SUM)
+
+test_significance <- cbind(train, train_sentiment)
+
+boxplot(SUM~is_duplicate,data=test_significance)
+
+sentiment_sum <- test_significance %>% select(SUM)
+#sentiment_full <- test_significance %>% select(id:is_duplicate, SUM)
+
+write.csv(sentiment_sum, "sentiment_sum.csv")
+
+
+#### TEST DATA SET ####
+# create id
+colnames(train_sentiment_filtered)[1] <- "id"
+
+train_sentiment_filtered <- train_sentiment_filtered %>% select(ANGER:SUM)
+
+test_significance_2 <- cbind(test, train_sentiment_filtered)
+
+boxplot(SUM~is_duplicate,data=test_significance_2)
+
+sentiment_sum_testset <- train_sentiment_filtered %>% select(SUM)
+#sentiment_full <- test_significance %>% select(id:is_duplicate, SUM)
+
+colnames(sentiment_sum_testset) <- "sentiment_analysis_sum"
+
+write.csv(sentiment_sum_testset, "sentiment_sum_testset.csv")
+
+
+
+```
+
+
